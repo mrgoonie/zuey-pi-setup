@@ -131,10 +131,11 @@ zuey-pi-setup/
     ├── external-configs.txt        manifest: which file goes where on restore
     ├── APPEND_SYSTEM.md            extra system prompt
     ├── models-store.json           model catalog (saves the 4h refresh wait)
+    ├── model-fallback/
+    │   └── config.json            pi-model-fallback rules (state.json is not taken)
     └── extensions/                 locally written extensions, not on npm
         ├── pi-footer-cache-tps.ts  pushes cache-TTL + token speed (t/s) into pi-footer
-        ├── pi-footer.json          statusline layout (includes the context bar)
-        └── provider-fallback.json  pi-provider-fallback model fallbacks
+        └── pi-footer.json          statusline layout (includes the context bar)
 ```
 
 `config/` is a **mirror** of the setup portion of `~/.pi/agent`. Everything else (cache, secrets, history) is **not** included.
@@ -200,7 +201,7 @@ EXTERNAL_CONFIGS=(
 
 ### `backups/pi-setup-portable.tar.gz`
 
-A ready-made bundle so you don't have to clone and run the backup yourself: **9 files** — `settings.json` (22 packages), `APPEND_SYSTEM.md`, `models-store.json`, `advisor.json`, `pi-lens-config.json`, `external-configs.txt`, `extensions/pi-footer.json`, `extensions/pi-footer-cache-tps.ts`, and `extensions/provider-fallback.json`.
+A ready-made bundle so you don't have to clone and run the backup yourself: **9 files** — `settings.json` (22 packages), `APPEND_SYSTEM.md`, `models-store.json`, `advisor.json`, `pi-lens-config.json`, `external-configs.txt`, `extensions/pi-footer.json`, `extensions/pi-footer-cache-tps.ts`, and `model-fallback/config.json`.
 
 It is the script's full default bundle, **filtered** through `.pi-setup-exclude` so machine-only material never reaches this public repo:
 
@@ -222,7 +223,7 @@ Restoring this bundle yields the same file set as `config/` — all 22 extension
 | 3 | `pi-subagents` | 0.68.0 | subagent delegation + scripted multi-agent workflows |
 | 4 | `pi-goal-x` | 0.31.4 | `/goal`: goal planning, durable progress, an auditor that checks completion |
 | 5 | `pi-background-tasks` | 2.5.0 | background shell tasks, read-only delegated agents, attested runs, Fusion workflows |
-| 6 | `pi-provider-fallback` | 1.0.4 | **cross-provider** model fallback on transient/quota/model-unavailable errors; TUI config |
+| 6 | `pi-model-fallback` | 0.4.0 | switches to a fallback model by **rule** (provider/model + HTTP status 429/5xx) on provider failure; durable state with cooldowns; configured through the `model_fallback_config` tool |
 | 7 | `@narumitw/pi-usage` | 0.60.8 | account usage display + DeepSeek API balance |
 | 8 | `pi-simplify` | 0.2.3 | reviews just-changed code for clarity, consistency, maintainability |
 | 9 | `pi-footer` | 0.5.1 | multi-row, customisable statusline (used by this repo) |
@@ -354,18 +355,36 @@ More on the bundled font — provenance, install steps for both platforms, licen
 
 ---
 
-## pi-provider-fallback
+## pi-model-fallback
 
-A model-fallback extension: when the active model hits a **transient / quota / model-unavailable** error, it switches to the next fallback model (preferring the **same provider**, then another one) and **re-runs the failed prompt**. If the new model has a smaller context window it triggers compaction first. The swap persists for the session; the original model is restored on shutdown or `/reload`.
+A rule-based model-fallback extension: when a provider returns an HTTP status matching a rule (by default `429`, `500`, `502`, `503`, `504`), pi switches to that rule's fallback model and persists **durable state** so later sessions keep using the new model until the cooldown expires (`429` → 72 hours, `5xx` → 10 minutes; `Retry-After` / `x-ratelimit-reset*` headers override when present). Rules match in order and the first match wins — so specific `matchModels` rules must come before broad `matchProviders` rules.
 
 ```bash
-/fallback-config     # TUI to pick a fallback model per provider
-/fallback-status     # show the current config
+/model-fallback:status   # whether it is enabled, which durable entry is active, config/state paths
+/model-fallback:reset    # clear durable state and return to the pre-fallback model
 ```
 
-Config lives at `~/.pi/agent/extensions/provider-fallback.json` → **inside `extensions/`, so it is backed up by default** (the script reports it explicitly under *config extension*). The shape template is `provider-fallback.example.json` inside the package.
+`autoRetry` (on by default) re-queues the failed prompt as a follow-up after the model switch; the failed request itself is not replayed.
 
-> The file only exists after you run `/fallback-config` for the first time. If you set `PI_PROVIDER_FALLBACK_CONFIG` to a path outside the config dir, the script warns that backup cannot see it.
+Config lives at `~/.pi/agent/model-fallback/config.json` and is read/validated/written by the extension's `model_fallback_config` tool — there is **no TUI**, unlike `pi-provider-fallback` (removed from this snapshot). The package default is `zai/*` → `deepseek/deepseek-v4-flash`; this snapshot replaces it with a rule for the `deepseek` provider:
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "autoRetry": true,
+  "rules": [
+    {
+      "name": "deepseek-to-deepseek-v4-flash",
+      "matchProviders": ["deepseek"],
+      "statuses": [429, 500, 502, 503, 504],
+      "fallback": { "provider": "deepseek", "model": "deepseek-v4-flash" }
+    }
+  ]
+}
+```
+
+> The notable difference from the previous extension: the config is **not** inside `extensions/` but in the same directory as `state.json`. So `scripts/pi-setup-backup.sh` lists `model-fallback/config.json` explicitly and **takes only the config file** — `state.json` is machine state and never ships; restore also writes only `config.json`.
 
 ---
 
@@ -449,7 +468,7 @@ node scripts/pi-setup-verify-advisor.mjs --file <path>
 
 ### `pi-setup-backup.sh`
 
-By default it takes only **setup**: `settings.json`, `APPEND_SYSTEM.md`, `models-store.json`, `extensions/` — and it **always includes the statusline** (`extensions/pi-footer.json` lives inside `extensions/`).
+By default it takes only **setup**: `settings.json`, `APPEND_SYSTEM.md`, `models-store.json`, `model-fallback/config.json`, `extensions/` — and it **always includes the statusline** (`extensions/pi-footer.json` lives inside `extensions/`).
 
 ```bash
 ./scripts/pi-setup-backup.sh                       # → ./pi-setup-portable.tar.gz (setup only)
@@ -473,7 +492,7 @@ By default it takes only **setup**: `settings.json`, `APPEND_SYSTEM.md`, `models
 |---|---|
 | `--no-statusline` | Does **not** back up the statusline config (`pi-footer.json`, `powerline-footer/theme.json`) — a new machine keeps the default layout |
 
-The script also: writes to a temp file then `mv`s it (no corrupt artifact on interruption) · **scans for secrets** (`sk-*`, `ghp_*`, `xox*`, `BEGIN PRIVATE KEY` with a base64 body, `api_key=…`) · **warns about symlinks pointing outside** · **reports extension config** (whether statusline / provider-fallback were backed up) · compresses deterministically (`gzip -n` → same content, same SHA-256) · refuses to write `--config-dir` into `$HOME`, `/`, or pi's own config dir.
+The script also: writes to a temp file then `mv`s it (no corrupt artifact on interruption) · **scans for secrets** (`sk-*`, `ghp_*`, `xox*`, `BEGIN PRIVATE KEY` with a base64 body, `api_key=…`) · **warns about symlinks pointing outside** · **reports extension config** (whether statusline / model-fallback were backed up) · compresses deterministically (`gzip -n` → same content, same SHA-256) · refuses to write `--config-dir` into `$HOME`, `/`, or pi's own config dir.
 
 > On secret scanning: the script ignores common placeholders (word-only values like `currentPassword`, `{CLIENT_SECRET}` forms, bare PEM headers, low-entropy strings like `ghp_aaaa…`). It can still flag **fixtures inside third-party package tests** (e.g. a Slack-token-shaped string in AgentKit's own tests) and **test strings you once pasted into chat** (with `--sessions`, since transcripts live under `sessions/`) — read the filenames before concluding.
 
@@ -547,7 +566,7 @@ Tested by restoring into a **brand-new** config dir via `PI_CODING_AGENT_DIR`, n
 - **`sessions/` and `missions/` are not in the repo** → chat/mission history is not migrated. Use `--sessions` / `--missions` to back them up yourself.
 - **2 skills are symlinks into AgentKit** (`skills/orchestration`, `skills/orca-per-workspace-env`) → they only work if the new machine has [AgentKit](https://github.com/bestagentkits) installed. Broken symlinks there affect **no** other extension (tested). Use `--skills` to back up the real content.
 - **3 `orca-*.ts` extensions** and **2 `agentkit-*` directories** are not in the repo → Orca/AgentKit regenerate them.
-- **`pi-provider-fallback` config** only exists after running `/fallback-config`; before that there is nothing to back up.
+- **`pi-model-fallback` config** lives at `~/.pi/agent/model-fallback/config.json` — the **same directory** as `state.json`, and `state.json` is machine state (entries + cooldown deadlines) so it is **not** backed up. The script lists the config file explicitly. Without that file the extension runs on the package default (`zai` → `deepseek/deepseek-v4-flash`).
 - **`pi-advisor-flow` config** (`~/.pi/agent/advisor.json`, at the config-dir **root** rather than inside `extensions/`) only exists after running `/advisor` or `/advisor-settings`. Backup lists that file explicitly, so it is included automatically once it appears.
 - **The scripts need a POSIX shell** → on Windows run them in **Git Bash** or **WSL**; PowerShell/cmd cannot run them.
 - **Statusline icons need a Nerd Font** → using the unpatched JetBrains Mono from `fonts/` breaks icons into ◆/✦/`?`; see [Terminal font](#terminal-font-nerd-font-required).

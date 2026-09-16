@@ -24,7 +24,7 @@
     "npm:pi-footer",
     "npm:pi-smart-fetch@0.3.17",
     "npm:@juicesharp/rpiv-btw",
-    "npm:pi-provider-fallback",
+    "npm:pi-model-fallback",
     "npm:pi-advisor-flow",
     "npm:@tmustier/pi-session-recap",
     "npm:pi-lens",

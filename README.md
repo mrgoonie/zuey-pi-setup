@@ -129,10 +129,11 @@ zuey-pi-setup/
     ├── external-configs.txt        manifest: file nào đặt về đâu khi restore
     ├── APPEND_SYSTEM.md            system prompt phụ
     ├── models-store.json           catalog model (khỏi chờ refresh 4h)
+    ├── model-fallback/
+    │   └── config.json            rule fallback của pi-model-fallback (state.json không lấy)
     └── extensions/                 extension tự viết, không có trên npm
         ├── pi-footer-cache-tps.ts  đẩy cache-TTL + tốc độ token (t/s) vào pi-footer
-        ├── pi-footer.json          layout statusline (gồm context bar)
-        └── provider-fallback.json  fallback model của pi-provider-fallback
+        └── pi-footer.json          layout statusline (gồm context bar)
 ```
 
 `config/` là **mirror** của phần setup trong `~/.pi/agent`. Mọi thứ khác (cache, secret, history) **không** được đưa vào.
@@ -198,7 +199,7 @@ EXTERNAL_CONFIGS=(
 
 ### `backups/pi-setup-portable.tar.gz`
 
-Bundle sẵn để tải, khỏi phải clone rồi tự tạo: **9 file** — `settings.json` (22 package), `APPEND_SYSTEM.md`, `models-store.json`, `advisor.json`, `pi-lens-config.json`, `external-configs.txt`, `extensions/pi-footer.json`, `extensions/pi-footer-cache-tps.ts` và `extensions/provider-fallback.json`.
+Bundle sẵn để tải, khỏi phải clone rồi tự tạo: **9 file** — `settings.json` (22 package), `APPEND_SYSTEM.md`, `models-store.json`, `advisor.json`, `pi-lens-config.json`, `external-configs.txt`, `extensions/pi-footer.json`, `extensions/pi-footer-cache-tps.ts` và `model-fallback/config.json`.
 
 Đây là bundle đầy đủ theo mặc định của script, **đã lọc** qua `.pi-setup-exclude` để không mang lên repo public những thứ chỉ thuộc về máy:
 
@@ -220,7 +221,7 @@ Restore bundle này cho cùng bộ file như `config/` — đủ 22 extension + 
 | 3 | `pi-subagents` | 0.68.0 | delegate cho subagent + workflow multi-agent bằng script |
 | 4 | `pi-goal-x` | 0.31.4 | `/goal`: lập kế hoạch mục tiêu, tiến độ bền, auditor kiểm tra hoàn thành |
 | 5 | `pi-background-tasks` | 2.5.0 | task shell chạy nền, delegated agent read-only, attested run, Fusion workflow |
-| 6 | `pi-provider-fallback` | 1.0.4 | fallback model **xuyên provider** khi gặp lỗi tạm thời/quota/model-unavailable; TUI config |
+| 6 | `pi-model-fallback` | 0.4.0 | chuyển sang model fallback theo **rule** (provider/model + HTTP status 429/5xx) khi provider lỗi; state bền có cooldown; config bằng tool `model_fallback_config` |
 | 7 | `@narumitw/pi-usage` | 0.60.8 | hiển thị usage của account + số dư DeepSeek API |
 | 8 | `pi-simplify` | 0.2.3 | review code vừa đổi theo hướng rõ ràng / nhất quán / dễ bảo trì |
 | 9 | `pi-footer` | 0.5.1 | statusline nhiều dòng, tuỳ biến được (dùng trong repo này) |
@@ -350,18 +351,36 @@ Rồi trỏ terminal vào font đó. Với Windows Terminal — sửa `%LOCALAPP
 
 ---
 
-## pi-provider-fallback
+## pi-model-fallback
 
-Extension fallback model: khi model đang dùng gặp lỗi **transient / quota / model-unavailable**, nó tự chuyển sang model fallback kế tiếp (ưu tiên **cùng provider** trước, rồi provider khác) và **chạy lại prompt bị lỗi**. Nếu model mới có context window nhỏ hơn, nó kích hoạt compaction trước. Swap giữ nguyên cho cả session, model gốc được phục hồi khi shutdown hoặc `/reload`.
+Extension fallback model theo **rule**: khi provider trả về HTTP status khớp rule (mặc định `429`, `500`, `502`, `503`, `504`), pi chuyển sang model fallback của rule đó và ghi **state bền** để các session sau vẫn dùng model mới cho tới khi hết cooldown (`429` → 72 giờ, `5xx` → 10 phút; header `Retry-After` / `x-ratelimit-reset*` ghi đè khi có). Rule khớp theo thứ tự, rule đầu tiên thắng — nên rule `matchModels` cụ thể phải đặt trước rule `matchProviders` rộng.
 
 ```bash
-/fallback-config     # TUI để chọn fallback model cho từng provider
-/fallback-status     # xem config hiện tại
+/model-fallback:status   # đang bật hay không, entry bền nào active, path config/state
+/model-fallback:reset    # xoá state bền + quay về model trước fallback
 ```
 
-Config lưu ở `~/.pi/agent/extensions/provider-fallback.json` → **nằm trong `extensions/` nên được backup mặc định** (script báo cáo tường minh trong phần *config extension*). Bản mẫu shape: `provider-fallback.example.json` trong package.
+`autoRetry` (mặc định bật) đưa lại prompt lỗi thành follow-up sau khi đã đổi model; bản thân request lỗi không được gửi lại.
 
-> File này chỉ được tạo sau khi bạn chạy `/fallback-config` lần đầu. Nếu bạn đặt biến `PI_PROVIDER_FALLBACK_CONFIG` trỏ ra ngoài config dir, script sẽ cảnh báo là backup không tự thấy được.
+Config ở `~/.pi/agent/model-fallback/config.json`, do tool `model_fallback_config` của extension đọc/validate/ghi — **không có TUI** như `pi-provider-fallback` (đã gỡ khỏi snapshot này). Mặc định của package là `zai/*` → `deepseek/deepseek-v4-flash`; snapshot này thay bằng rule cho provider `deepseek`:
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "autoRetry": true,
+  "rules": [
+    {
+      "name": "deepseek-to-deepseek-v4-flash",
+      "matchProviders": ["deepseek"],
+      "statuses": [429, 500, 502, 503, 504],
+      "fallback": { "provider": "deepseek", "model": "deepseek-v4-flash" }
+    }
+  ]
+}
+```
+
+> Điểm khác đáng chú ý so với extension cũ: config **không** nằm trong `extensions/` mà cùng thư mục với `state.json`. Vì vậy `scripts/pi-setup-backup.sh` liệt kê riêng `model-fallback/config.json` và **chỉ lấy file config** — `state.json` là state theo máy nên không được đưa vào artifact; restore cũng chỉ ghi `config.json`.
 
 ---
 
@@ -445,7 +464,7 @@ node scripts/pi-setup-verify-advisor.mjs --file <path>
 
 ### `pi-setup-backup.sh`
 
-Mặc định chỉ lấy **setup**: `settings.json`, `APPEND_SYSTEM.md`, `models-store.json`, `extensions/` — và **luôn lấy cả statusline** (`extensions/pi-footer.json` nằm trong `extensions/`).
+Mặc định chỉ lấy **setup**: `settings.json`, `APPEND_SYSTEM.md`, `models-store.json`, `model-fallback/config.json`, `extensions/` — và **luôn lấy cả statusline** (`extensions/pi-footer.json` nằm trong `extensions/`).
 
 ```bash
 ./scripts/pi-setup-backup.sh                       # → ./pi-setup-portable.tar.gz (chỉ setup)
@@ -469,7 +488,7 @@ Mặc định chỉ lấy **setup**: `settings.json`, `APPEND_SYSTEM.md`, `model
 |---|---|
 | `--no-statusline` | **Không** backup cấu hình statusline (`pi-footer.json`, `powerline-footer/theme.json`) — máy mới sẽ dùng layout mặc định |
 
-Script tự: ghi file tạm rồi `mv` (không để lại artifact hỏng khi bị ngắt) · **quét secret** (`sk-*`, `ghp_*`, `xox*`, `BEGIN PRIVATE KEY` có thân base64, `api_key=…`) · **cảnh báo symlink trỏ ra ngoài** · **báo cáo config extension** (statusline / provider-fallback có được backup hay không) · nén deterministic (`gzip -n` → cùng nội dung cho cùng SHA-256) · từ chối ghi `--config-dir` vào `$HOME`, `/`, hoặc chính config dir của pi.
+Script tự: ghi file tạm rồi `mv` (không để lại artifact hỏng khi bị ngắt) · **quét secret** (`sk-*`, `ghp_*`, `xox*`, `BEGIN PRIVATE KEY` có thân base64, `api_key=…`) · **cảnh báo symlink trỏ ra ngoài** · **báo cáo config extension** (statusline / model-fallback có được backup hay không) · nén deterministic (`gzip -n` → cùng nội dung cho cùng SHA-256) · từ chối ghi `--config-dir` vào `$HOME`, `/`, hoặc chính config dir của pi.
 
 > Về quét secret: script bỏ qua placeholder phổ biến (giá trị thuần chữ như `currentPassword`, dạng `{CLIENT_SECRET}`, PEM header không có thân, entropy thấp như `ghp_aaaa…`). Vẫn có thể báo **fixture trong test của chính package** (VD một chuỗi kiểu Slack token trong test của chính AgentKit) và **chuỗi test bạn từng dán vào chat** (khi dùng `--sessions`, vì transcript nằm trong `sessions/`) — đọc tên file trước khi kết luận.
 
@@ -543,7 +562,7 @@ Test bằng cách restore vào một config dir **hoàn toàn mới** qua `PI_CO
 - **`sessions/` và `missions/` không nằm trong repo** → không migrate lịch sử chat/mission. Dùng `--sessions` / `--missions` để tự backup riêng.
 - **2 skill là symlink sang AgentKit** (`skills/orchestration`, `skills/orca-per-workspace-env`) → chỉ chạy nếu máy mới cài [AgentKit](https://github.com/bestagentkits). Gãy 2 symlink này **không** ảnh hưởng extension nào khác (đã test). Dùng `--skills` để backup kèm nội dung thật.
 - **3 extension `orca-*.ts`** và **2 thư mục `agentkit-*`** không nằm trong repo → Orca/AgentKit tự sinh lại.
-- **`pi-provider-fallback` config** chỉ có sau khi chạy `/fallback-config`; trước đó không có gì để backup.
+- **`pi-model-fallback` config** ở `~/.pi/agent/model-fallback/config.json` — **cùng thư mục** với `state.json`, mà `state.json` là state theo máy (entry + mốc cooldown) nên **không** được backup. Script liệt kê riêng đúng file config. Chưa có file thì extension chạy bằng default của package (`zai` → `deepseek/deepseek-v4-flash`).
 - **`pi-advisor-flow` config** (`~/.pi/agent/advisor.json`, nằm ở **gốc** config dir chứ không trong `extensions/`) chỉ tồn tại sau khi chạy `/advisor` hoặc `/advisor-settings`. Backup đã liệt kê riêng file này nên sẽ tự kèm khi nó xuất hiện.
 - **Script cần shell POSIX** → trên Windows phải chạy trong **Git Bash** hoặc **WSL**; PowerShell/cmd không chạy được script này.
 - **Icon statusline cần Nerd Font** → dùng JetBrains Mono **gốc** trong `fonts/` sẽ làm icon vỡ thành ◆/✦/`?`; xem [Font terminal](#font-terminal-bắt-buộc-nerd-font).

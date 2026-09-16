@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "enabled": true,
+  "autoRetry": true,
+  "rules": [
+    {
+      "name": "deepseek-to-deepseek-v4-flash",
+      "matchProviders": ["deepseek"],
+      "statuses": [429, 500, 502, 503, 504],
+      "fallback": {
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash"
+      }
+    }
+  ]
+}

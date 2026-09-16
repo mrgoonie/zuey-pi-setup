@@ -46,7 +46,7 @@ Cơ chế này có trong `docs/packages.md` của pi và đã được kiểm ch
 | `APPEND_SYSTEM.md` | 4 KB | ✅ | system prompt phụ |
 | `extensions/` | 1.3 MB | ✅ (lọc) | extension tự viết local + config của chúng. `orca-*.ts` (Orca sinh) và `agentkit-*` (AgentKit sinh) bị loại — xem `.pi-setup-exclude` |
 | `extensions/pi-footer.json` | 1.3 KB | ✅ **mặc định** | layout statusline (gồm context bar) — opt-out bằng `--no-statusline` |
-| `extensions/provider-fallback.json` | — | ✅ **mặc định** | config của `pi-provider-fallback`, tạo bởi `/fallback-config` |
+| `model-fallback/config.json` | — | ✅ **mặc định** | rule của `pi-model-fallback`, ở thư mục `model-fallback/` (không trong `extensions/`) nên liệt kê riêng; **chỉ lấy file config** — `state.json` cùng thư mục là state theo máy (entry + mốc cooldown), không đưa vào artifact |
 | `extensions/*/hooks/` | 544 KB | ⚠️ opt-in | `--hooks` (mặc định đã nằm trong `extensions/` khi không lọc) |
 | `models-store.json` | 28 KB | ✅ | catalog model; có sẵn thì khỏi chờ refresh 4 giờ |
 | `99extensions.json` | — | ✅ **mặc định** | config họ 99percentpeople (`@99percentpeople/pi-todo`), ở gốc config dir; chỉ có sau khi dùng `/99settings` |
@@ -192,16 +192,16 @@ Config này **được backup mặc định** (nằm trong `extensions/`); `--no
 
 ---
 
-## `pi-provider-fallback`
+## `pi-model-fallback`
 
-Khi model đang dùng gặp lỗi **transient / quota / model-unavailable**, extension tự chuyển sang model fallback kế tiếp (ưu tiên **cùng provider** trước, rồi provider khác) và **chạy lại prompt bị lỗi**; nếu model mới có context window nhỏ hơn thì kích hoạt compaction trước. Swap giữ cho cả session, model gốc phục hồi khi shutdown hoặc `/reload`.
+Extension fallback model theo **rule**: khi provider trả về HTTP status khớp rule (mặc định `429`, `500`, `502`, `503`, `504`), pi chuyển sang model fallback của rule đó và ghi **state bền** để các session sau vẫn dùng model mới cho tới khi hết cooldown (`429` → 72 giờ, `5xx` → 10 phút; header `Retry-After` / `x-ratelimit-reset*` ghi đè khi có). Rule khớp theo thứ tự, rule đầu tiên thắng. `autoRetry` (mặc định bật) đưa lại prompt lỗi thành follow-up sau khi đổi model.
 
 ```bash
-/fallback-config     # TUI chọn fallback model cho từng provider (tự lưu mỗi action)
-/fallback-status     # xem config hiện tại
+/model-fallback:status   # đang bật hay không, entry bền nào active, path config/state
+/model-fallback:reset    # xoá state bền + quay về model trước fallback
 ```
 
-Config: `~/.pi/agent/extensions/provider-fallback.json` → **backup mặc định** (script báo cáo trong phần *config extension*). File chỉ tồn tại sau lần đầu chạy `/fallback-config`. Nếu đặt `PI_PROVIDER_FALLBACK_CONFIG` trỏ ra ngoài config dir, script sẽ cảnh báo là backup không tự thấy được.
+Config: `~/.pi/agent/model-fallback/config.json` → **backup mặc định** (script báo cáo trong phần *config extension*), do tool `model_fallback_config` đọc/validate/ghi. File **cùng thư mục với `state.json`** — mà `state.json` là state theo máy — nên script chỉ liệt kê đúng file config; restore cũng chỉ ghi file đó. Nếu chưa có file, extension chạy bằng default của package (`zai` → `deepseek/deepseek-v4-flash`).
 
 ---
 
@@ -264,7 +264,7 @@ Script tự:
 - ghi ra file tạm rồi `mv` → không để lại artifact hỏng nếu bị ngắt;
 - **quét secret** (`sk-*`, `ghp_*`, `BEGIN PRIVATE KEY`, `api_key=…`) và cảnh báo — bỏ qua placeholder trong tài liệu (`password: "securePassword123"`, `{CLIENT_SECRET}`) để cảnh báo còn lại mới đáng đọc;
 - **cảnh báo symlink trỏ ra ngoài** config dir (gợi ý dùng `--skills`);
-- **báo cáo config extension** trong phần tóm tắt: statusline (`pi-footer.json`) và provider-fallback (`provider-fallback.json`) có được backup hay không;
+- **báo cáo config extension** trong phần tóm tắt: statusline (`pi-footer.json`) và model-fallback (`model-fallback/config.json`) có được backup hay không;
 - ở chế độ `--config-dir`, tôn trọng `<DIR>/.pi-setup-exclude` (glob loại trừ), dọn cả thư mục rỗng còn sót → artifact public không bị thêm lại file nhạy cảm; ở chế độ tarball thì dùng `--exclude-file` cùng cú pháp;
 - nén **deterministic** (`gzip -n`) → cùng nội dung cho cùng SHA-256, kiểm tra được giữa 2 máy;
 - từ chối ghi `--config-dir` vào `$HOME`, `/`, hoặc chính thư mục config của pi.
@@ -473,6 +473,6 @@ loại trừ: 82 file khớp .pi-setup-exclude (extensions/orca-*.ts extensions/
 - [ ] `/login` cho `opencode-go`, `deepseek`, `openai-codex`
 - [ ] `pi auth check --provider opencode-go` → OK
 - [ ] Thử 1 extension, ví dụ `/btw <câu hỏi>` (cần TUI mode)
-- [ ] Chạy `/fallback-config` để cấu hình fallback model (sau đó backup tự kèm `provider-fallback.json`)
+- [ ] Kiểm tra `/model-fallback:status` (config `model-fallback/config.json` đã được restore kèm; backup tự cập nhật khi bạn đổi rule qua tool `model_fallback_config`)
 - [ ] Chạy `/advisor-settings` để cấu hình Executor/Advisor (sau đó backup tự kèm `advisor.json`)
 - [ ] Cài AgentKit nếu cần skill symlink
