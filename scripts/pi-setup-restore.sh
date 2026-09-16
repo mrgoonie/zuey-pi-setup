@@ -33,7 +33,9 @@ EXTERNAL_MANIFEST="external-configs.txt"
 
 # Nội dung được phép restore. Có gì trong nguồn thì copy cái đó.
 # 'hooks' không cần liệt kê riêng: chúng nằm trong cây extensions/.
-ITEMS=(settings.json APPEND_SYSTEM.md models-store.json advisor.json 99extensions.json extensions skills memory missions sessions auth.json)
+# 'model-fallback/config.json' là file lồng trong thư mục riêng (pi-model-fallback); chỉ
+# restore file config, KHÔNG restore model-fallback/state.json (state theo máy).
+ITEMS=(settings.json APPEND_SYSTEM.md models-store.json advisor.json 99extensions.json model-fallback/config.json extensions skills memory missions sessions auth.json)
 
 info() { printf '%s\n' "$*"; }
 warn() { printf '⚠  %s\n' "$*" >&2; }
@@ -156,6 +158,7 @@ for item in "${ITEMS[@]}"; do
 		mkdir -p "$TARGET/$item"
 		cp -R "$src_path/." "$TARGET/$item/"
 	else
+		mkdir -p "$(dirname "$TARGET/$item")" # mục lồng nhau, VD model-fallback/config.json
 		cp "$src_path" "$TARGET/$item"
 	fi
 	RESTORED+=("$item")

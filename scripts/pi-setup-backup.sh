@@ -4,7 +4,7 @@
 #
 # Mặc định chỉ lấy SETUP (không lấy state/secret/lịch sử):
 #   settings.json (manifest toàn bộ extension), APPEND_SYSTEM.md,
-#   models-store.json, extensions/
+#   models-store.json, extensions/, model-fallback/config.json
 #
 # Các phần còn lại phải opt-in từng cái:
 #   --auth       auth.json      ⚠ CHỨA CREDENTIAL (API key + OAuth token)
@@ -38,7 +38,10 @@ AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 # dùng làm config toàn cục → phải liệt kê riêng, nếu không sẽ không được backup.
 # advisor.json và 99extensions.json nằm ở GỐC config dir (không trong extensions/)
 # → phải liệt kê riêng, nếu không sẽ không được backup.
-ITEMS_SETUP=(settings.json APPEND_SYSTEM.md models-store.json advisor.json 99extensions.json extensions)
+# model-fallback/config.json của pi-model-fallback cũng nằm ngoài extensions/ (trong
+# thư mục model-fallback/) → liệt kê riêng. CHỈ lấy file config, KHÔNG lấy cả thư mục:
+# state.json cùng thư mục là state theo máy (entry + mốc cooldown), không phải setup.
+ITEMS_SETUP=(settings.json APPEND_SYSTEM.md models-store.json advisor.json 99extensions.json model-fallback/config.json extensions)
 
 OUT="$ROOT/pi-setup-portable.tar.gz"
 CONFIG_DIR=""
@@ -61,13 +64,15 @@ FLAG_NO_STATUSLINE=0
 # Pattern nhạy cảm — chặn trường hợp vô tình đưa secret vào artifact.
 SECRET_RE='((^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{32,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"?(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)"?[[:space:]]*[:=][[:space:]]*"[^"]{12,}")'
 
-# Cấu hình của các extension: nằm trong extensions/ nên MẬC ĐỊNH đã được backup.
-# Script báo cáo tường minh để bạn biết cái nào có/không; --no-statusline loại nhóm statusline.
+# Cấu hình của các extension: phần lớn nằm trong extensions/ nên MẬC ĐỊNH đã được
+# backup; riêng advisor.json, 99extensions.json và model-fallback/config.json được
+# liệt kê thêm ở ITEMS_SETUP. Script báo cáo tường minh để bạn biết cái nào có/không;
+# --no-statusline loại nhóm statusline.
 # định dạng: <đường dẫn tương đối trong AGENT_DIR>|<nhãn>|<có bị --no-statusline loại không>
 CONFIG_CANDIDATES=(
 	"extensions/pi-footer.json|statusline (pi-footer)|yes"
 	"extensions/powerline-footer/theme.json|statusline (pi-powerline-footer)|yes"
-	"extensions/provider-fallback.json|fallback (pi-provider-fallback)|no"
+	"model-fallback/config.json|fallback (pi-model-fallback)|no"
 	"advisor.json|advisor flow (pi-advisor-flow)|no"
 	"99extensions.json|todo (pi-todo)|no"
 )
@@ -208,11 +213,6 @@ for entry in "${CONFIG_CANDIDATES[@]}"; do
 		CONFIG_FOUND+=("$label: (chưa có file $path)")
 	fi
 done
-
-# Nếu người dùng trỏ config ra ngoài config dir thì backup không tự thấy được.
-if [ -n "${PI_PROVIDER_FALLBACK_CONFIG:-}" ]; then
-	warn "PI_PROVIDER_FALLBACK_CONFIG=$PI_PROVIDER_FALLBACK_CONFIG — file này nằm NGOÀI backup, copy thủ công nếu cần"
-fi
 
 # Pattern loại trừ từ --exclude-file (áp cho cả tarball lẫn --config-dir).
 if [ -n "$EXCLUDE_FILE" ]; then
@@ -531,7 +531,11 @@ if [ -n "$CONFIG_DIR" ]; then
 		case "$name" in .* | "$EXTERNAL_MANIFEST") continue ;; esac
 		found=0
 		for item in "${INCLUDE[@]}"; do
-			[ "$name" = "$(basename "$item")" ] && found=1
+			# Khớp chính mục đó, hoặc là thư mục cha của một mục lồng bên trong
+			# (VD 'model-fallback' chứa mục 'model-fallback/config.json').
+			case "$item" in
+				"$name" | "$name"/*) found=1 ;;
+			esac
 		done
 		[ "$found" -eq 0 ] && STALE+=("$name")
 	done < <(find "$CONFIG_DIR" -maxdepth 1 -mindepth 1 2>/dev/null)
