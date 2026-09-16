@@ -117,7 +117,8 @@ zuey-pi-setup/
 ├── scripts/
 │   ├── pi-setup-backup.sh           đóng gói setup hiện tại của máy đang chạy
 │   ├── pi-setup-restore.sh          dựng lại setup trên máy mới
-│   └── pi-setup-verify-advisor.mjs  kiểm tra advisor.json theo schema thật của pi-advisor-flow
+│   ├── pi-setup-verify-advisor.mjs  kiểm tra advisor.json theo schema thật của pi-advisor-flow
+│   └── pi-lens-compact-lsp-status.mjs  vá pi-lens: dòng status LSP gọn (`LSP ✓` / `LSP ✗`)
 ├── backups/
 │   └── pi-setup-portable.tar.gz     bundle sẵn để tải (đã lọc — xem bên dưới)
 └── config/                          snapshot setup (plain file, diff được bằng git)
@@ -434,13 +435,21 @@ Phần gây khó chịu là **widget** (`setWidget("pi-lens", …)`, hiện find
 
 Statusline: extension này công bố key `pi-lens-lsp` (giá trị kiểu `LSP Active: ts` / `LSP Inactive`) → đã vào `hiddenKeys` + có widget inline, nên bạn **thấy được LSP có chạy hay không** mà statusline vẫn 3 hàng.
 
+Mặc định giá trị đó liệt kê tên server (`LSP Active: typescript, jsonc, …`) và pi-lens **không có** config nào cho dòng này, nên repo này rút gọn nó bằng một **bản vá bundle**: `LSP ✓` (xanh) khi có server, `LSP ✗` (đỏ) khi có server lỗi, `LSP ✗` (mờ) khi không có — khi vừa có server chạy vừa có server lỗi thì hiện `LSP ✓ · LSP ✗` (giữ nguyên ngữ nghĩa của bản gốc). Chạy lại sau mỗi lần `pi update`:
+
+```bash
+node scripts/pi-lens-compact-lsp-status.mjs           # vá (no-op nếu đã vá)
+node scripts/pi-lens-compact-lsp-status.mjs --check   # chỉ báo trạng thái
+node scripts/pi-lens-compact-lsp-status.mjs --revert  # trả về nguyên bản
+```
+
 Config của nó nằm **ngoài** config dir của pi, nên `scripts/pi-setup-backup.sh` có cơ chế riêng cho nhóm này: xem mục *Config nằm ngoài config dir* bên dưới.
 
 ---
 
 ## Scripts
 
-Hai script setup **không hỏi xác nhận** — chạy được trong script/CI. Rủi ro xử lý bằng snapshot + cảnh báo ra `stderr`. Script thứ ba chỉ **đọc**.
+Hai script setup **không hỏi xác nhận** — chạy được trong script/CI. Rủi ro xử lý bằng snapshot + cảnh báo ra `stderr`. Script thứ ba chỉ **đọc**; script thứ tư sửa **một file** trong bundle pi-lens đã cài (rút gọn dòng status LSP).
 
 ### `pi-setup-verify-advisor.mjs`
 
@@ -461,6 +470,26 @@ node scripts/pi-setup-verify-advisor.mjs --file <path>
 | `2` | lỗi môi trường: không thấy bundle `pi-advisor-flow`, bundle đổi định dạng, tham số sai |
 
 > Vì sao cần: tôi từng viết `advisorFailureMode` (lấy từ tên biến nội bộ trong bundle) trong khi key thật là `gateFailureMode` — file trông đúng, **không** có tác dụng, và mãi sau mới thấy warning. Script này bắt đúng lớp lỗi đó (xem bảng Kiểm chứng).
+
+### `pi-lens-compact-lsp-status.mjs`
+
+pi-lens hardcode dòng status LSP trong bundle (`updateLspStatus`): `` `LSP Active: ${activeIds.join(", ")}` ``, `` `LSP Failed: ${failedIds.join(", ")}` ``, `"LSP Inactive"`. Không có key config nào cho dòng này (`~/.pi-lens/config.json` chỉ có `lsp.enabled`, `widget.visible`, `format.enabled`, `autofix.enabled`, `ui.compactToolLine`, `actionableWarnings.*`), và extension khác cũng không sửa hộ được: `ctx.ui` chỉ có `setStatus` (ghi), còn `footerData.getExtensionStatuses()` chỉ tồn tại **bên trong** footer renderer — mà footer đang do `pi-footer` nắm (`setFooter` last-wins), nên widget `Pi Extension Status` chỉ render nguyên văn (option `trimValue` của nó cắt phần **đầu**, không đụng được danh sách server ở đuôi).
+
+Script vá đúng 3 chuỗi đó, mỗi chuỗi phải khớp **đúng 1 lần**:
+
+```bash
+node scripts/pi-lens-compact-lsp-status.mjs           # vá (no-op nếu đã vá)
+node scripts/pi-lens-compact-lsp-status.mjs --check   # chỉ báo trạng thái, không ghi
+node scripts/pi-lens-compact-lsp-status.mjs --revert  # trả bundle về nguyên bản
+```
+
+| Exit | Nghĩa |
+|---|---|
+| `0` | đã vá / vừa vá xong / vừa revert xong |
+| `1` | chưa vá (khi `--check`) hoặc bundle khác định dạng → **không** tự sửa |
+| `2` | lỗi môi trường (không thấy bundle pi-lens, tham số sai) |
+
+> ⚠ npm ghi đè `pi-lens/dist/index.js` mỗi lần `pi update` hoặc cài lại pi-lens → **chạy lại script này**. Đó là lý do một script vá nằm trong repo snapshot. Đã gửi đề xuất upstream xin option chính thức cho dòng status này.
 
 ### `pi-setup-backup.sh`
 
@@ -505,7 +534,7 @@ Script tự: ghi file tạm rồi `mv` (không để lại artifact hỏng khi b
 | `--with-trust` | copy cả `trust.json` |
 | `--dry-run` | chỉ in ra, không ghi |
 
-Trước khi ghi đè, `settings.json` **và** `auth.json` (nếu nguồn có) được snapshot thành `*.bak.<timestamp>`. Script có `trap ERR` nên không bao giờ thoát im lặng — luôn in số dòng khi gặp lỗi ngoài dự kiến.
+Trước khi ghi đè, `settings.json` **và** `auth.json` (nếu nguồn có) được snapshot thành `*.bak.<timestamp>`. Script có `trap ERR` nên không bao giờ thoát im lặng — luôn in số dòng khi gặp lỗi ngoài dự kiến. Sau khi restore, script in thêm **bước 4**: trạng thái vá dòng status LSP của pi-lens ở đích vừa restore (chỉ báo, không tự sửa package bên thứ ba).
 
 ---
 
@@ -567,6 +596,7 @@ Test bằng cách restore vào một config dir **hoàn toàn mới** qua `PI_CO
 - **Script cần shell POSIX** → trên Windows phải chạy trong **Git Bash** hoặc **WSL**; PowerShell/cmd không chạy được script này.
 - **Icon statusline cần Nerd Font** → dùng JetBrains Mono **gốc** trong `fonts/` sẽ làm icon vỡ thành ◆/✦/`?`; xem [Font terminal](#font-terminal-bắt-buộc-nerd-font).
 - **`pi` cài global theo từng Node version** → `nvm use` / `fnm use` sang version khác có thể làm mất lệnh `pi`; cài lại global cho version đó.
+- **Dòng status LSP của `pi-lens` là bản vá bundle**, không phải config → `pi update` ghi đè mất; chạy lại `node scripts/pi-lens-compact-lsp-status.mjs` (script tự dừng với exit `1` nếu pi-lens đổi định dạng hàm, không sửa mù).
 
 ---
 

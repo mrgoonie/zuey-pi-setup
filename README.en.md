@@ -119,7 +119,8 @@ zuey-pi-setup/
 ├── scripts/
 │   ├── pi-setup-backup.sh           packages the current machine's setup
 │   ├── pi-setup-restore.sh          rebuilds that setup on a new machine
-│   └── pi-setup-verify-advisor.mjs  validates advisor.json against pi-advisor-flow's real schema
+│   ├── pi-setup-verify-advisor.mjs  validates advisor.json against pi-advisor-flow's real schema
+│   └── pi-lens-compact-lsp-status.mjs  patches pi-lens so the LSP status line is compact (`LSP ✓` / `LSP ✗`)
 ├── backups/
 │   └── pi-setup-portable.tar.gz     ready-to-download bundle (filtered — see below)
 └── config/                          setup snapshot (plain files, git-diffable)
@@ -438,13 +439,21 @@ The annoying part is the **widget** (`setWidget("pi-lens", …)`, showing per-fi
 
 Statusline: the extension publishes the key `pi-lens-lsp` (values like `LSP Active: ts` / `LSP Inactive`) → in `hiddenKeys` with an inline widget, so you **can see whether LSP is running** while the statusline stays 3 rows.
 
+By default that value lists the server names (`LSP Active: typescript, jsonc, …`) and pi-lens has **no** config for it, so this repo compacts it with a **bundle patch**: `LSP ✓` (green) when servers are alive, `LSP ✗` (red) when one failed, `LSP ✗` (dim) when none — with both alive and failed servers it shows `LSP ✓ · LSP ✗`, keeping the original two-state semantics. Re-run after every `pi update`:
+
+```bash
+node scripts/pi-lens-compact-lsp-status.mjs           # patch (no-op if already patched)
+node scripts/pi-lens-compact-lsp-status.mjs --check   # report state only
+node scripts/pi-lens-compact-lsp-status.mjs --revert  # restore the original bundle
+```
+
 Its config lives **outside** pi's config dir, which is why `scripts/pi-setup-backup.sh` has a dedicated mechanism for that group: see *Config that lives outside the config dir* above.
 
 ---
 
 ## Scripts
 
-The two setup scripts **never ask for confirmation** — they are safe to run from scripts/CI. Risk is handled with snapshots plus warnings on `stderr`. The third script only **reads**.
+The two setup scripts **never ask for confirmation** — they are safe to run from scripts/CI. Risk is handled with snapshots plus warnings on `stderr`. The third script only **reads**; the fourth edits one file inside the installed pi-lens bundle.
 
 ### `pi-setup-verify-advisor.mjs`
 
@@ -465,6 +474,26 @@ node scripts/pi-setup-verify-advisor.mjs --file <path>
 | `2` | environment problem: no `pi-advisor-flow` bundle, bundle changed format, bad arguments |
 
 > Why it exists: I once wrote `advisorFailureMode` (taken from an internal variable name in the bundle) when the real key is `gateFailureMode` — the file looked right, did **nothing**, and the warning showed up much later. This script catches exactly that class of mistake.
+
+### `pi-lens-compact-lsp-status.mjs`
+
+pi-lens hardcodes the LSP status line in its bundle (`updateLspStatus`): `` `LSP Active: ${activeIds.join(", ")}` ``, `` `LSP Failed: ${failedIds.join(", ")}` ``, `"LSP Inactive"`. There is no config key for it (`~/.pi-lens/config.json` only has `lsp.enabled`, `widget.visible`, `format.enabled`, `autofix.enabled`, `ui.compactToolLine`, `actionableWarnings.*`), and no other extension can fix it either: `ctx.ui` only exposes `setStatus` (write-only), while `footerData.getExtensionStatuses()` exists **only inside** a footer renderer — and `pi-footer` owns the footer (`setFooter` is last-wins), so its `Pi Extension Status` widget just renders the raw value (its `trimValue` option trims the **leading** part, so it cannot touch the trailing server list).
+
+The script replaces exactly those three strings, and each one must match **exactly once**:
+
+```bash
+node scripts/pi-lens-compact-lsp-status.mjs           # patch (no-op if already patched)
+node scripts/pi-lens-compact-lsp-status.mjs --check   # report state only, no write
+node scripts/pi-lens-compact-lsp-status.mjs --revert  # restore the original bundle
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | patched / just patched / just reverted |
+| `1` | not patched (with `--check`) or an unrecognised bundle → it does **not** guess |
+| `2` | environment problem (pi-lens bundle not found, bad arguments) |
+
+> ⚠ npm overwrites `pi-lens/dist/index.js` on every `pi update` or pi-lens reinstall → **re-run this script**. That is why a patch script lives in this snapshot repo. An upstream request for a first-class option is filed.
 
 ### `pi-setup-backup.sh`
 
@@ -509,7 +538,7 @@ The script also: writes to a temp file then `mv`s it (no corrupt artifact on int
 | `--with-trust` | also copy `trust.json` |
 | `--dry-run` | print only, write nothing |
 
-Before overwriting, `settings.json` **and** `auth.json` (when present in the source) are snapshotted to `*.bak.<timestamp>`. The script sets `trap ERR`, so it never exits silently — it always prints the line number on unexpected errors.
+Before overwriting, `settings.json` **and** `auth.json` (when present in the source) are snapshotted to `*.bak.<timestamp>`. The script sets `trap ERR`, so it never exits silently — it always prints the line number on unexpected errors. After a restore it also prints **step 4**: whether the pi-lens LSP status patch is in place in the restored target (informational only — it never mutates a third-party package).
 
 ---
 
@@ -571,6 +600,7 @@ Tested by restoring into a **brand-new** config dir via `PI_CODING_AGENT_DIR`, n
 - **The scripts need a POSIX shell** → on Windows run them in **Git Bash** or **WSL**; PowerShell/cmd cannot run them.
 - **Statusline icons need a Nerd Font** → using the unpatched JetBrains Mono from `fonts/` breaks icons into ◆/✦/`?`; see [Terminal font](#terminal-font-nerd-font-required).
 - **`pi` installs globally per Node version** → `nvm use` / `fnm use` to a different version can make the `pi` command disappear; reinstall it globally for that version.
+- **The `pi-lens` LSP status line is a bundle patch**, not config → `pi update` overwrites it; re-run `node scripts/pi-lens-compact-lsp-status.mjs` (the script stops with exit `1` if pi-lens changes the shape of that function instead of guessing).
 
 ---
 

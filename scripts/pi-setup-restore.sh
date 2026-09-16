@@ -266,5 +266,16 @@ info "Bước tiếp theo:"
 info "  1. mở pi rồi /login cho từng provider   (opencode-go, deepseek, openai-codex)"
 info "  2. pi auth check --provider opencode-go"
 info "  3. thử 1 extension, ví dụ /btw <câu hỏi>"
+# Dòng status LSP của pi-lens chỉ gọn được bằng script vá bundle (không có config nào cho
+# nó) → báo trạng thái THẬT của đích vừa restore thay vì để người đọc tự nhớ. Chỉ báo,
+# KHÔNG tự sửa: restore không sửa code của package bên thứ ba.
+LENS_PATCH="$SCRIPT_DIR/pi-lens-compact-lsp-status.mjs"
+LENS_STEP="(tùy chọn) rút gọn dòng status LSP: node scripts/pi-lens-compact-lsp-status.mjs"
+if [ -f "$LENS_PATCH" ] && command -v node >/dev/null 2>&1; then
+	if node "$LENS_PATCH" --check --pkg "$TARGET/npm/node_modules/pi-lens/dist/index.js" >/dev/null 2>&1; then
+		LENS_STEP="pi-lens LSP status đã ở dạng gọn (LSP ✓ / LSP ✗)"
+	fi
+fi
+info "  4. $LENS_STEP"
 [ "$SCRATCH" -eq 1 ] && info "  (scratch) kiểm tra tay:  PI_CODING_AGENT_DIR=$TARGET pi list"
 exit 0

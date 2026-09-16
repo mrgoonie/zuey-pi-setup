@@ -190,6 +190,8 @@ Context 1M ở 25% → `[████░░░░░░░░░░░░] 250k/
 
 Config này **được backup mặc định** (nằm trong `extensions/`); `--no-statusline` để opt-out.
 
+Hàng 3 còn có widget đọc key `pi-lens-lsp` (do **pi-lens** publish). Repo này rút gọn giá trị đó thành `LSP ✓` / `LSP ✗` bằng script vá bundle — xem `pi-lens-compact-lsp-status.mjs` trong phần *Scripts* bên dưới.
+
 ---
 
 ## `pi-model-fallback`
@@ -207,7 +209,7 @@ Config: `~/.pi/agent/model-fallback/config.json` → **backup mặc định** (s
 
 ## Scripts
 
-Hai script setup **không hỏi xác nhận** — rủi ro được xử lý bằng snapshot + cảnh báo ra `stderr`, để chạy được trong script/CI. Script thứ ba chỉ **đọc**.
+Hai script setup **không hỏi xác nhận** — rủi ro được xử lý bằng snapshot + cảnh báo ra `stderr`, để chạy được trong script/CI. Script thứ ba chỉ **đọc**; script thứ tư sửa **một file** trong bundle pi-lens đã cài (rút gọn dòng status LSP).
 
 ### `pi-setup-verify-advisor.mjs`
 
@@ -225,6 +227,28 @@ Bắt: key lạ, sai type, giá trị ngoài enum, ref không có dạng `provid
 | `0` | sạch |
 | `1` | config sai (kể cả JSON hỏng, thiếu file, snapshot lệch) |
 | `2` | lỗi môi trường (không thấy bundle `pi-advisor-flow`, bundle đổi định dạng, tham số sai) |
+
+### `pi-lens-compact-lsp-status.mjs`
+
+pi-lens hardcode dòng status LSP trong bundle (`updateLspStatus`) và **không có** config nào cho dòng này; extension khác cũng không sửa hộ được (xem phần *pi-lens* trong README). Script vá đúng 3 chuỗi — mỗi chuỗi phải khớp **đúng 1 lần**, nếu pi-lens đổi cách viết hàm thì script dừng chứ không sửa mù:
+
+```bash
+node scripts/pi-lens-compact-lsp-status.mjs           # vá (no-op nếu đã vá)
+node scripts/pi-lens-compact-lsp-status.mjs --check   # chỉ báo trạng thái, không ghi
+node scripts/pi-lens-compact-lsp-status.mjs --revert  # trả bundle về nguyên bản
+```
+
+Kết quả: `LSP ✓` (xanh) khi có server, `LSP ✗` (đỏ) khi có server lỗi, `LSP ✗` (mờ) khi không có — thay cho `LSP Active: <danh sách server>`; khi vừa có server chạy vừa có server lỗi thì hiện `LSP ✓ · LSP ✗` (giữ nguyên ngữ nghĩa hai trạng thái của bản gốc).
+
+| Exit | Nghĩa |
+|---|---|
+| `0` | đã vá / vừa vá xong / vừa revert xong |
+| `1` | chưa vá (khi `--check`) hoặc bundle khác định dạng → **không** tự sửa |
+| `2` | lỗi môi trường (không thấy bundle pi-lens, tham số sai) |
+
+> ⚠ `pi update` ghi đè `pi-lens/dist/index.js` → chạy lại script này sau mỗi lần update.
+
+Script ghi bundle theo kiểu **atomic** (file tạm + rename), và nhận diện riêng trạng thái **vá dở** (lần chạy trước bị ngắt) để hoàn tất nốt thay vì từ chối. Anchor thiếu hoặc lặp → dừng với exit `1` kèm gợi ý cài lại pi-lens.
 
 ### `scripts/pi-setup-backup.sh`
 
@@ -287,6 +311,8 @@ Nếu không chỉ định nguồn, script tự dùng `<repo>/pi-setup-portable.
 Trước khi ghi đè, `settings.json` **và** `auth.json` (nếu nguồn có file) được snapshot thành `*.bak.<timestamp>` — auth là credential nên ghi đè mà không sao lưu là không thể khôi phục.
 
 Script đặt `trap ERR` nên **không bao giờ thoát im lặng** — gặp lỗi ngoài dự kiến sẽ in `✗ lỗi không mong đợi tại pi-setup-restore.sh dòng <N>`.
+
+Sau khi restore xong, script in thêm bước 4: trạng thái vá dòng status LSP của pi-lens ở **đích vừa restore** (chỉ báo, không tự sửa) — để biết ngay cần chạy `pi-lens-compact-lsp-status.mjs` hay không.
 
 ---
 
@@ -476,3 +502,4 @@ loại trừ: 82 file khớp .pi-setup-exclude (extensions/orca-*.ts extensions/
 - [ ] Kiểm tra `/model-fallback:status` (config `model-fallback/config.json` đã được restore kèm; backup tự cập nhật khi bạn đổi rule qua tool `model_fallback_config`)
 - [ ] Chạy `/advisor-settings` để cấu hình Executor/Advisor (sau đó backup tự kèm `advisor.json`)
 - [ ] Cài AgentKit nếu cần skill symlink
+- [ ] Rút gọn dòng status LSP: `node scripts/pi-lens-compact-lsp-status.mjs` (chạy lại sau mỗi lần `pi update`)
